@@ -828,8 +828,8 @@ function loadChart(coin, tf, btn) {
   const padRight = 60;
   const chartW = w - padLeft - padRight;
   const chartH = h - padTop - padBottom;
-  const candleW = Math.max(1, (chartW / data.length) * 0.7);
-  const gap = (chartW / data.length) * 0.3;
+  const candleW = Math.max(1, (chartW / data.length) * 0.5);
+  const gap = (chartW / data.length) * 0.5;
 
   function y(val) {
     return padTop + chartH - ((val - minL) / range) * chartH;
@@ -854,7 +854,14 @@ function loadChart(coin, tf, btn) {
 
     const bodyTop = Math.min(y(d.o), y(d.c));
     const bodyH = Math.max(1, Math.abs(y(d.o) - y(d.c)));
-    ctx.fillRect(x, bodyTop, candleW, bodyH);
+    if (isUp) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, bodyTop, candleW, bodyH);
+    } else {
+      ctx.fillStyle = color;
+      ctx.fillRect(x, bodyTop, candleW, bodyH);
+    }
   });
 
   ctx.fillStyle = '#64748b';
