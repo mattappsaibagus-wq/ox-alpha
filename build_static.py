@@ -18,6 +18,7 @@ import time
 from datetime import datetime
 import urllib.request
 import urllib.error
+import urllib.parse
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(BASE_DIR, "data", "reports")
@@ -55,31 +56,35 @@ def coingecko_id(symbol):
     return COINGECKO_ID_MAP.get(symbol.lower(), symbol.lower())
 
 
-def fetch_ohlc(coin, days=7):
-    """Fetch OHLC data from CoinGecko for a coin."""
-    coin_id = coingecko_id(coin)
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days={days}&interval=daily"
-    headers = {}
+def fetch_json(url):
+    headers = {"Accept": "application/json"}
     api_key = os.environ.get("COINGECKO_KEY")
     if api_key:
         headers["x-cg-demo-api-key"] = api_key
-    
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        print(f"  CoinGecko error for {coin} ({coin_id}): {e.code}")
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                print(f"  CoinGecko error: {e.code}")
+                return None
+            time.sleep(1.5 * (attempt + 1))
+        except Exception as e:
+            print(f"  CoinGecko error: {e}")
+            time.sleep(0.5 * (attempt + 1))
+    return None
+
+
+def fetch_ohlc_for_id(coin, coin_id, days=7):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days={days}&interval=daily"
+    data = fetch_json(url)
+    if not isinstance(data, dict):
         return None
-    except Exception as e:
-        print(f"  CoinGecko error for {coin} ({coin_id}): {e}")
-        return None
-    
     prices = data.get("prices", [])
     if not prices:
         return None
-    
-    # Bucket into ~7 daily candles
     buckets = 7
     bucket_size = max(1, len(prices) // buckets)
     ohlc = []
@@ -96,9 +101,106 @@ def fetch_ohlc(coin, days=7):
             "o": opens[0],
             "h": max(opens),
             "l": min(opens),
-            "c": opens[-1]
+            "c": opens[-1],
         })
     return ohlc
+
+
+def fetch_ohlc(coin, days=7):
+    return fetch_ohlc_for_id(coin, coingecko_id(coin), days)
+
+
+def sparkline_to_ohlc(prices):
+    points = []
+    for point in prices:
+        if not isinstance(point, list) or len(point) < 2:
+            continue
+        try:
+            points.append((int(point[0]), float(point[1])))
+        except (TypeError, ValueError):
+            continue
+    if len(points) < 2:
+        return None
+    buckets = 7
+    ohlc = []
+    for i in range(buckets):
+        start = int(i * len(points) / buckets)
+        end = int((i + 1) * len(points) / buckets)
+        if end <= start:
+            end = start + 1
+        slice_ = points[start:end]
+        values = [point[1] for point in slice_]
+        ohlc.append({
+            "x": slice_[0][0],
+            "o": values[0],
+            "h": max(values),
+            "l": min(values),
+            "c": values[-1],
+        })
+    return ohlc
+
+
+def fetch_market_sparklines(symbols):
+    wanted = {symbol.upper() for symbol in symbols}
+    resolved = {}
+    for page in range(1, 11):
+        url = (
+            "https://api.coingecko.com/api/v3/coins/markets"
+            f"?vs_currency=usd&order=market_cap_desc&per_page=250&page={page}&sparkline=true"
+        )
+        data = fetch_json(url)
+        if not isinstance(data, list):
+            break
+        for coin in data:
+            symbol = str(coin.get("symbol", "")).upper()
+            if symbol not in wanted:
+                continue
+            preferred_id = COINGECKO_ID_MAP.get(symbol.lower())
+            coin_id = coin.get("id")
+            if symbol not in resolved or (preferred_id and coin_id == preferred_id):
+                resolved[symbol] = coin
+        if wanted.issubset(resolved):
+            break
+        time.sleep(0.2)
+    return resolved
+
+
+def search_coin_id(symbol):
+    known_id = COINGECKO_ID_MAP.get(symbol.lower())
+    if known_id:
+        return known_id
+    encoded = urllib.parse.quote(symbol)
+    data = fetch_json(f"https://api.coingecko.com/api/v3/search?query={encoded}")
+    if not isinstance(data, dict):
+        return None
+    target = symbol.upper()
+    for coin in data.get("coins", []):
+        if str(coin.get("symbol", "")).upper() == target:
+            return coin.get("id")
+    return None
+
+
+def fetch_all_chart_data(cards):
+    chart_data = {}
+    symbols = [card["coin"] for card in cards]
+    print("  Resolving CoinGecko market data...")
+    markets = fetch_market_sparklines(symbols)
+    for card in cards:
+        coin = card["coin"]
+        symbol = coin.upper()
+        market = markets.get(symbol)
+        coin_id = market.get("id") if market else search_coin_id(coin)
+        ohlc = None
+        if market:
+            ohlc = sparkline_to_ohlc(market.get("sparkline_in_7d", {}).get("price", []))
+        if not ohlc and coin_id:
+            ohlc = fetch_ohlc_for_id(coin, coin_id, days=7)
+        if ohlc:
+            chart_data[coin] = ohlc
+            print(f"  Chart data ready for {coin}")
+        else:
+            print(f"    No data for {coin}")
+    return chart_data
 
 
 def derive_market_stats(chart_data):
@@ -122,21 +224,6 @@ def derive_market_stats(chart_data):
             "change7d": change7d,
         }
     return stats
-
-
-def fetch_all_chart_data(cards):
-    """Fetch chart data for all coins in cards."""
-    chart_data = {}
-    for card in cards:
-        coin = card["coin"]
-        print(f"  Fetching chart data for {coin}...")
-        ohlc = fetch_ohlc(coin, days=7)
-        if ohlc:
-            chart_data[coin] = ohlc
-        else:
-            print(f"    No data for {coin}")
-        time.sleep(0.2)  # be nice to the API
-    return chart_data
 
 
 def parse_report_cards(md):
