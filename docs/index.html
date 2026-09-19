@@ -407,7 +407,7 @@ main { position: relative; z-index: 1; }
   background: var(--bg-surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
-  max-width: 500px;
+  max-width: 560px;
   width: 100%;
   max-height: 85vh;
   overflow-y: auto;
@@ -470,12 +470,17 @@ main { position: relative; z-index: 1; }
 }
 
 .chart-container {
-  background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
-  padding: 12px;
+  background:
+    radial-gradient(120% 90% at 20% 0%, rgba(99,102,241,0.08), transparent 48%),
+    linear-gradient(180deg, #111a2b 0%, #0b101c 100%);
+  border: 1px solid rgba(99,102,241,0.18);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 12px 30px rgba(0,0,0,0.22);
+  padding: 14px;
   margin: 12px 0;
-  height: 280px;
+  height: 300px;
   position: relative;
+  overflow: hidden;
 }
 .chart-container canvas { width: 100% !important; height: 100% !important; display: block; }
 
@@ -819,52 +824,178 @@ function loadChart(coin, tf, btn) {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
-  const minL = Math.min(...data.map(d => d.l));
-  const maxH = Math.max(...data.map(d => d.h));
-  const range = maxH - minL || 1;
-  const padTop = 16;
-  const padBottom = 28;
-  const padLeft = 8;
-  const padRight = 60;
+  const validData = data.filter(d => Number.isFinite(d.o) && Number.isFinite(d.h) && Number.isFinite(d.l) && Number.isFinite(d.c));
+  if (!validData.length) {
+    if (loading) loading.textContent = 'Chart data unavailable';
+    return;
+  }
+
+  const rawMin = Math.min(...validData.map(d => d.l));
+  const rawMax = Math.max(...validData.map(d => d.h));
+  const rawRange = rawMax - rawMin || 1;
+  const pricePadding = rawRange * 0.08;
+  const minPrice = rawMin - pricePadding;
+  const maxPrice = rawMax + pricePadding;
+  const priceRange = maxPrice - minPrice || 1;
+  const padTop = 22;
+  const padBottom = 32;
+  const padLeft = 10;
+  const padRight = 66;
   const chartW = w - padLeft - padRight;
   const chartH = h - padTop - padBottom;
-  const candleW = Math.max(1, Math.min(8, chartW / data.length * 0.7));
+  const slot = chartW / validData.length;
+  const candleW = Math.max(5, Math.min(30, slot * 0.68));
+  const wickW = Math.max(1, Math.min(2, candleW * 0.08));
+  const bodyRadius = Math.min(3, candleW * 0.18);
 
   function y(val) {
-    return padTop + chartH - ((val - minL) / range) * chartH;
+    return padTop + chartH - ((val - minPrice) / priceRange) * chartH;
   }
 
   function xAt(i) {
-    return padLeft + (i + 0.5) * (chartW / data.length);
+    return padLeft + (i + 0.5) * slot;
   }
 
-  data.forEach((d, i) => {
+  function formatPrice(val) {
+    if (val >= 1000) return '$' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (val >= 1) return '$' + val.toFixed(2);
+    if (val >= 0.01) return '$' + val.toFixed(4);
+    return '$' + val.toFixed(6);
+  }
+
+  function roundRect(context, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    context.beginPath();
+    context.moveTo(x + r, y);
+    context.arcTo(x + width, y, x + width, y + height, r);
+    context.arcTo(x + width, y + height, x, y + height, r);
+    context.arcTo(x, y + height, x, y, r);
+    context.arcTo(x, y, x + width, y, r);
+    context.closePath();
+  }
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.imageSmoothingEnabled = true;
+
+  ctx.fillStyle = 'rgba(2,6,16,0.2)';
+  ctx.fillRect(padLeft, padTop, chartW, chartH);
+
+  ctx.font = '10px Inter, sans-serif';
+  ctx.textBaseline = 'middle';
+  const ySteps = 4;
+  for (let i = 0; i <= ySteps; i++) {
+    const yPos = padTop + (chartH / ySteps) * i;
+    const val = maxPrice - (priceRange / ySteps) * i;
+    ctx.strokeStyle = 'rgba(148,163,184,0.09)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padLeft, yPos);
+    ctx.lineTo(padLeft + chartW, yPos);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(100,116,139,0.9)';
+    ctx.textAlign = 'left';
+    ctx.fillText(formatPrice(val), padLeft + chartW + 8, yPos);
+  }
+
+  ctx.strokeStyle = 'rgba(148,163,184,0.05)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < validData.length; i++) {
+    const xPos = xAt(i);
+    ctx.beginPath();
+    ctx.moveTo(xPos, padTop);
+    ctx.lineTo(xPos, padTop + chartH);
+    ctx.stroke();
+  }
+
+  const last = validData[validData.length - 1];
+  const lastY = y(last.c);
+  const lastColor = last.c >= last.o ? '#17d99a' : '#ff5b72';
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = lastColor + '55';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padLeft, lastY);
+  ctx.lineTo(padLeft + chartW, lastY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = lastColor;
+  roundRect(ctx, padLeft + chartW + 5, lastY - 9, 56, 18, 5);
+  ctx.fill();
+  ctx.fillStyle = '#061019';
+  ctx.font = '700 10px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(formatPrice(last.c).replace('$', ''), padLeft + chartW + 33, lastY + 0.5);
+  ctx.restore();
+
+  validData.forEach((d, i) => {
     const x = xAt(i);
     const isUp = d.c >= d.o;
-    const color = isUp ? '#12d37e' : '#ff4d6a';
+    const color = isUp ? '#17d99a' : '#ff5b72';
+    const wickColor = isUp ? 'rgba(23,217,154,0.72)' : 'rgba(255,91,114,0.72)';
+    const bodyTop = Math.min(y(d.o), y(d.c));
+    const bodyBottom = Math.max(y(d.o), y(d.c));
+    const bodyH = Math.max(1, bodyBottom - bodyTop);
 
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineWidth = 1;
-
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = wickColor;
+    ctx.lineWidth = wickW;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 4;
     ctx.beginPath();
     ctx.moveTo(x, y(d.h));
     ctx.lineTo(x, y(d.l));
     ctx.stroke();
+    ctx.restore();
 
-    const bodyTop = Math.min(y(d.o), y(d.c));
-    const bodyH = Math.max(1, Math.abs(y(d.o) - y(d.c)));
-    ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
+    ctx.save();
+    if (bodyH < 2) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(1.5, candleW * 0.12);
+      ctx.lineCap = 'round';
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 5;
+      ctx.beginPath();
+      ctx.moveTo(x - candleW * 0.35, y(d.o));
+      ctx.lineTo(x + candleW * 0.35, y(d.o));
+      ctx.stroke();
+    } else {
+      const gradient = ctx.createLinearGradient(0, bodyTop, 0, bodyBottom);
+      if (isUp) {
+        gradient.addColorStop(0, '#38f5b5');
+        gradient.addColorStop(1, '#0b9e74');
+      } else {
+        gradient.addColorStop(0, '#ff7185');
+        gradient.addColorStop(1, '#e83e5b');
+      }
+      ctx.fillStyle = gradient;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 7;
+      ctx.shadowOffsetY = 1;
+      roundRect(ctx, x - candleW / 2, bodyTop, candleW, bodyH, bodyRadius);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.strokeStyle = isUp ? 'rgba(151,255,218,0.34)' : 'rgba(255,151,169,0.34)';
+      ctx.lineWidth = 0.75;
+      roundRect(ctx, x - candleW / 2, bodyTop, candleW, bodyH, bodyRadius);
+      ctx.stroke();
+    }
+    ctx.restore();
   });
 
-  ctx.fillStyle = '#64748b';
-  ctx.font = '10px Inter, sans-serif';
-  ctx.textAlign = 'right';
-  const ySteps = 4;
-  for (let i = 0; i <= ySteps; i++) {
-    const val = minL + (range / ySteps) * (ySteps - i);
-    const yPos = padTop + (chartH / ySteps) * i;
-    ctx.fillText('$' + val.toFixed(val >= 1 ? 2 : 4), w - 4, yPos + 3);
+  ctx.fillStyle = 'rgba(100,116,139,0.82)';
+  ctx.font = '9px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const labelCount = Math.min(validData.length, 7);
+  const labelStep = Math.max(1, Math.floor(validData.length / labelCount));
+  for (let i = 0; i < validData.length; i += labelStep) {
+    const date = new Date(validData[i].x);
+    const label = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    ctx.fillText(label, Math.max(padLeft + 18, Math.min(padLeft + chartW - 18, xAt(i))), padTop + chartH + 10);
   }
 
   if (loading) loading.style.display = 'none';
