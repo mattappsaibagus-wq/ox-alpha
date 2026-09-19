@@ -623,6 +623,7 @@ main { position: relative; z-index: 1; }
 <script>
 let lastTimestamp = null;
 let allCards = [];
+let chartData = {};
 let currentFilter = 'ALL';
 
 async function loadData() {
@@ -630,6 +631,7 @@ async function loadData() {
     const r = await fetch('data.json', { cache: 'no-store' });
     const data = await r.json();
     allCards = data.cards || [];
+    chartData = data.chart_data || {};
     render(data);
   } catch(e) {
     document.getElementById('cards').innerHTML = '<div class="empty-state"><div class="icon">❌</div>Failed to load report</div>';
@@ -809,70 +811,16 @@ async function loadCoinStats(coin) {
 }
 
 let chartRequestId = 0;
-const marketCache = new Map();
 
-const COINGECKO_ID_MAP = {
-  'btc': 'bitcoin',
-  'sol': 'solana',
-  'near': 'near',
-  'storj': 'storj',
-  'zec': 'zcash',
-  'lsk': 'lisk',
-  'eth': 'ethereum',
-  'arb': 'arbitrum',
-  'op': 'optimism',
-  'matic': 'matic-network',
-  'avax': 'avalanche-2',
-  'dot': 'polkadot',
-  'link': 'chainlink',
-  'uni': 'uniswap',
-  'aave': 'aave',
-  'snx': 'havven',
-  'crv': 'curve-dao-token',
-  'sushi': 'sushi',
-  'yfi': 'yearn-finance',
-  'comp': 'compound-governance-token',
-  'mkcr': 'maker',
-  'ldo': 'lido-dao',
-  'rpl': 'rocket-pool',
-  'steth': 'staked-ether',
-  'wsteth': 'wrapped-staked-ether',
-};
-
-async function getCandlestickData(coin, days) {
+function getCandlestickData(coin, days) {
   const key = coin + ':' + days;
-  if (marketCache.has(key)) return marketCache.get(key);
-  const coinId = COINGECKO_ID_MAP[coin.toLowerCase()] || coin.toLowerCase();
-  try {
-    const res = await fetch('https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(coinId) + '/market_chart?vs_currency=usd&days=' + days + '&interval=' + (days <= 1 ? 'hourly' : 'daily'));
-    if (!res.ok) throw new Error('API error: ' + res.status);
-    const data = await res.json();
-    const prices = data.prices || [];
-    if (!prices.length) return null;
-    const buckets = days <= 1 ? 24 : days <= 7 ? 7 : 30;
-    const bucketSize = Math.ceil(prices.length / buckets);
-    const ohlc = [];
-    for (let i = 0; i < buckets && i * bucketSize < prices.length; i++) {
-      const slice = prices.slice(i * bucketSize, Math.min((i + 1) * bucketSize, prices.length));
-      const opens = slice.map(p => p[1]);
-      const timestamps = slice.map(p => p[0]);
-      ohlc.push({
-        x: timestamps[0],
-        o: opens[0],
-        h: Math.max(...opens),
-        l: Math.min(...opens),
-        c: opens[opens.length - 1]
-      });
-    }
-    marketCache.set(key, ohlc);
-    return ohlc;
-  } catch(e) {
-    console.error('Chart error for ' + coin + ':', e.message);
-    return null;
+  if (chartData[coin]) {
+    return chartData[coin];
   }
+  return null;
 }
 
-async function loadChart(coin, tf, btn) {
+function loadChart(coin, tf, btn) {
   const requestId = ++chartRequestId;
   const canvas = document.getElementById('coinChart');
   if (!canvas) return;
@@ -884,7 +832,7 @@ async function loadChart(coin, tf, btn) {
   const loading = document.getElementById('chartLoading');
   if (loading) { loading.style.display = 'block'; loading.textContent = 'Loading candlesticks...'; }
 
-  const data = await getCandlestickData(coin, days);
+  const data = getCandlestickData(coin, days);
   if (requestId !== chartRequestId) return;
   if (!data || !data.length) {
     if (loading) loading.textContent = 'Chart data unavailable';

@@ -14,12 +14,106 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
+import urllib.request
+import urllib.error
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(BASE_DIR, "data", "reports")
 SIGNALS_FILE = os.path.join(BASE_DIR, "data", "signals.json")
 DOCS_DIR = os.path.join(BASE_DIR, "docs")
+
+COINGECKO_ID_MAP = {
+    'btc': 'bitcoin',
+    'sol': 'solana',
+    'near': 'near',
+    'storj': 'storj',
+    'zec': 'zcash',
+    'lsk': 'lisk',
+    'eth': 'ethereum',
+    'arb': 'arbitrum',
+    'op': 'optimism',
+    'matic': 'matic-network',
+    'avax': 'avalanche-2',
+    'dot': 'polkadot',
+    'link': 'chainlink',
+    'uni': 'uniswap',
+    'aave': 'aave',
+    'snx': 'havven',
+    'crv': 'curve-dao-token',
+    'sushi': 'sushi',
+    'yfi': 'yearn-finance',
+    'comp': 'compound-governance-token',
+    'mkr': 'maker',
+    'ldo': 'lido-dao',
+    'rpl': 'rocket-pool',
+}
+
+
+def coingecko_id(symbol):
+    return COINGECKO_ID_MAP.get(symbol.lower(), symbol.lower())
+
+
+def fetch_ohlc(coin, days=7):
+    """Fetch OHLC data from CoinGecko for a coin."""
+    coin_id = coingecko_id(coin)
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days={days}&interval=daily"
+    headers = {}
+    api_key = os.environ.get("COINGECKO_KEY")
+    if api_key:
+        headers["x-cg-demo-api-key"] = api_key
+    
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        print(f"  CoinGecko error for {coin} ({coin_id}): {e.code}")
+        return None
+    except Exception as e:
+        print(f"  CoinGecko error for {coin} ({coin_id}): {e}")
+        return None
+    
+    prices = data.get("prices", [])
+    if not prices:
+        return None
+    
+    # Bucket into ~7 daily candles
+    buckets = 7
+    bucket_size = max(1, len(prices) // buckets)
+    ohlc = []
+    for i in range(buckets):
+        start = i * bucket_size
+        end = min((i + 1) * bucket_size, len(prices))
+        if start >= end:
+            break
+        slice_ = prices[start:end]
+        opens = [p[1] for p in slice_]
+        timestamps = [p[0] for p in slice_]
+        ohlc.append({
+            "x": timestamps[0],
+            "o": opens[0],
+            "h": max(opens),
+            "l": min(opens),
+            "c": opens[-1]
+        })
+    return ohlc
+
+
+def fetch_all_chart_data(cards):
+    """Fetch chart data for all coins in cards."""
+    chart_data = {}
+    for card in cards:
+        coin = card["coin"]
+        print(f"  Fetching chart data for {coin}...")
+        ohlc = fetch_ohlc(coin, days=7)
+        if ohlc:
+            chart_data[coin] = ohlc
+        else:
+            print(f"    No data for {coin}")
+        time.sleep(0.2)  # be nice to the API
+    return chart_data
 
 
 def parse_report_cards(md):
@@ -102,17 +196,25 @@ def main():
         with open(SIGNALS_FILE, "r") as f:
             signals = json.load(f)
 
+    cards = parse_report_cards(md)
+    
+    # Fetch chart data
+    print("\nFetching chart data from CoinGecko...")
+    chart_data = fetch_all_chart_data(cards)
+    print(f"  Got chart data for {len(chart_data)} coins")
+
     data = {
         "timestamp": ts,
-        "cards": parse_report_cards(md),
+        "cards": cards,
         "signals": len(signals),
         "workflow_url": workflow_url(),
+        "chart_data": chart_data,
     }
 
     os.makedirs(DOCS_DIR, exist_ok=True)
     with open(os.path.join(DOCS_DIR, "data.json"), "w") as f:
         json.dump(data, f, indent=2)
-    print(f"Wrote docs/data.json: {len(data['cards'])} cards, {data['signals']} signals")
+    print(f"Wrote docs/data.json: {len(data['cards'])} cards, {data['signals']} signals, {len(chart_data)} chart datasets")
 
 
 if __name__ == "__main__":
