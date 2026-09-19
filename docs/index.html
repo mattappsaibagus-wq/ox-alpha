@@ -624,6 +624,7 @@ main { position: relative; z-index: 1; }
 let lastTimestamp = null;
 let allCards = [];
 let chartData = {};
+let marketStats = {};
 let currentFilter = 'ALL';
 
 async function loadData() {
@@ -632,6 +633,7 @@ async function loadData() {
     const data = await r.json();
     allCards = data.cards || [];
     chartData = data.chart_data || {};
+    marketStats = data.market_stats || {};
     render(data);
   } catch(e) {
     document.getElementById('cards').innerHTML = '<div class="empty-state"><div class="icon">❌</div>Failed to load report</div>';
@@ -866,6 +868,26 @@ function loadChart(coin, tf, btn) {
   }
 
   if (loading) loading.style.display = 'none';
+
+  loadMarketStats(coin);
+}
+
+function loadMarketStats(coin) {
+  const stats = marketStats[coin] || marketStats[coin.toLowerCase()] || null;
+  const ids = { high24h: 'high24h', low24h: 'low24h', change24h: 'dailyChange', change7d: 'weeklyChange' };
+  for (const [key, id] of Object.entries(ids)) {
+    const el = document.getElementById(id);
+    if (!el || !stats) { if (el) { el.textContent = '--'; el.className = 'market-stat-value flat'; } continue; }
+    const val = stats[key];
+    if (val === undefined || val === null || val === '') { el.textContent = '--'; el.className = 'market-stat-value flat'; continue; }
+    if (key === 'change24h' || key === 'change7d') {
+      el.textContent = (val > 0 ? '+' : '') + val.toFixed(2) + '%';
+      el.className = 'market-stat-value ' + (val > 0 ? 'gain' : val < 0 ? 'loss' : 'flat');
+    } else {
+      el.textContent = '$' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      el.className = 'market-stat-value';
+    }
+  }
 }
 
   document.getElementById('runBtn').addEventListener('click', function(e) {
