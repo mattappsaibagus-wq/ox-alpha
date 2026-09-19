@@ -482,7 +482,41 @@ main { position: relative; z-index: 1; }
   position: relative;
   overflow: hidden;
 }
-.chart-container canvas { width: 100% !important; height: 100% !important; display: block; }
+.chart-container canvas { width: 100% !important; height: 100% !important; display: block; touch-action: none; cursor: crosshair; }
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  min-height: 15px;
+  margin: 10px 2px 0;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+.chart-legend b { font-weight: 700; color: var(--text); }
+.chart-legend .up { color: var(--green); }
+.chart-legend .down { color: var(--red); }
+.chart-legend .stamp { color: var(--text-dim); margin-left: auto; }
+
+.chart-note {
+  display: none;
+  text-align: center;
+  margin-top: 6px;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+}
+
+.chart-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 46px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.chart-empty .icon { display: block; font-size: 1.7rem; margin-bottom: 8px; }
+.chart-empty .hint { font-size: 0.68rem; font-weight: 400; color: var(--text-dim); margin-top: 6px; line-height: 1.5; }
+.chart-empty a { color: var(--indigo); text-decoration: none; }
 
 .market-stats {
   display: grid;
@@ -632,12 +666,67 @@ let chartData = {};
 let marketStats = {};
 let currentFilter = 'ALL';
 
+const TF_ORDER = ['1d', '7d', '30d'];
+
+function formatPrice(val) {
+  if (!Number.isFinite(val)) return '--';
+  if (val >= 1000) return '$' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (val >= 1) return '$' + val.toFixed(2);
+  if (val >= 0.01) return '$' + val.toFixed(4);
+  if (val >= 0.0001) return '$' + val.toFixed(6);
+  return '$' + val.toFixed(8);
+}
+
+function normalizeCandles(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(c => ({
+      x: Number(c && c.x),
+      o: Number(c && c.o),
+      h: Number(c && c.h),
+      l: Number(c && c.l),
+      c: Number(c && c.c),
+    }))
+    .filter(c => Number.isFinite(c.o) && Number.isFinite(c.h) && Number.isFinite(c.l) && Number.isFinite(c.c))
+    .sort((a, b) => (Number.isFinite(a.x) ? a.x : 0) - (Number.isFinite(b.x) ? b.x : 0));
+}
+
+// Older data.json builds shipped one flat candle array per coin. Normalise any
+// payload into { '1d': [], '7d': [], '30d': [] } so every tab can always render.
+function normalizeChartData(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  Object.keys(raw).forEach(coin => {
+    const entry = raw[coin];
+    if (!entry) return;
+    const series = {};
+    if (Array.isArray(entry)) {
+      const candles = normalizeCandles(entry);
+      if (candles.length) {
+        series['7d'] = candles;
+        series['30d'] = candles;
+        series['1d'] = candles.slice(-6);
+      }
+    } else if (typeof entry === 'object') {
+      Object.keys(entry).forEach(tf => {
+        const candles = normalizeCandles(entry[tf]);
+        if (candles.length) series[tf] = candles;
+      });
+      if (!series['1d'] && series['7d']) series['1d'] = series['7d'].slice(-6);
+      if (!series['7d'] && series['30d']) series['7d'] = series['30d'].slice(-42);
+      if (!series['30d'] && series['7d']) series['30d'] = series['7d'];
+    }
+    if (Object.keys(series).length) out[coin] = series;
+  });
+  return out;
+}
+
 async function loadData() {
   try {
     const r = await fetch('data.json', { cache: 'no-store' });
     const data = await r.json();
     allCards = data.cards || [];
-    chartData = data.chart_data || {};
+    chartData = normalizeChartData(data.chart_data);
     marketStats = data.market_stats || {};
     render(data);
   } catch(e) {
@@ -741,6 +830,9 @@ function renderCards(cards) {
 }
 
 function closeModal() {
+  activeChart = null;
+  hoverState.idx = null;
+  chartGeom = null;
   document.getElementById('modalOverlay').classList.remove('active');
 }
 
@@ -761,22 +853,25 @@ function showCoinModal(coin) {
       '</ul>';
   }
 
+  const ticker = coin.coin.replace(/'/g, "\\'");
   document.getElementById('modalTitle').textContent = coin.coin + ' — ' + coin.action;
   document.getElementById('modalBody').innerHTML =
     '<div class="chart-container"><canvas id="coinChart"></canvas></div>' +
+    '<div class="chart-legend" id="chartLegend"></div>' +
+    '<div class="chart-note" id="chartNote"></div>' +
     '<div id="chartLoading" style="text-align:center;color:var(--text-dim);padding:20px;">Loading candlesticks...</div>' +
     '<div class="market-stats">' +
     '<div class="market-stat"><div class="market-stat-label">24H HIGH</div><div id="high24h" class="market-stat-value">--</div></div>' +
     '<div class="market-stat"><div class="market-stat-label">24H LOW</div><div id="low24h" class="market-stat-value">--</div></div>' +
     '<div class="market-stat"><div class="market-stat-label">DAILY CHANGE</div><div id="dailyChange" class="market-stat-value flat">--</div></div>' +
-    '<div class="market-stat"><div class="market-stat-label">WEEKLY CHANGE</div><div id="weeklyChange" class="market-stat-value flat">--</div></div>' +
+    '<div class="market-stat"><div class="market-stat-label" id="rangeChangeLabel">7D CHANGE</div><div id="rangeChange" class="market-stat-value flat">--</div></div>' +
     '</div>' +
     '<div class="tf-btns">' +
-    '<button class="tf-btn" onclick="loadChart(\'' + coin.coin + '\',\'1d\',this)">1d</button>' +
-    '<button class="tf-btn active" onclick="loadChart(\'' + coin.coin + '\',\'7d\',this)">7d</button>' +
-    '<button class="tf-btn" onclick="loadChart(\'' + coin.coin + '\',\'30d\',this)">30d</button>' +
+    '<button class="tf-btn" data-tf="1d" onclick="loadChart(\'' + ticker + '\',\'1d\',this)">1d</button>' +
+    '<button class="tf-btn active" data-tf="7d" onclick="loadChart(\'' + ticker + '\',\'7d\',this)">7d</button>' +
+    '<button class="tf-btn" data-tf="30d" onclick="loadChart(\'' + ticker + '\',\'30d\',this)">30d</button>' +
     '</div>' +
-    '<p style="text-align:center;margin-top:8px;font-size:0.72rem;color:var(--text-dim)">Powered by CoinGecko</p>' +
+    '<p style="text-align:center;margin-top:8px;font-size:0.72rem;color:var(--text-dim)">Live OHLC candles &middot; Powered by CoinGecko</p>' +
     detailsHtml;
 
   document.getElementById('modalOverlay').classList.add('active');
@@ -784,49 +879,114 @@ function showCoinModal(coin) {
 }
 
 let chartRequestId = 0;
+let activeChart = null;
+let chartGeom = null;
+let chartResizeTimer = null;
+const hoverState = { idx: null };
 
-function getCandlestickData(coin, days) {
-  const all = chartData[coin];
-  if (!all || !all.length) return null;
-  if (days <= 1) return all.slice(-1);
-  if (days <= 7) return all.slice(-days);
-  return null;
+const TF_LABELS = { '1d': '1-day (30 min)', '7d': '7-day (4 hour)', '30d': '30-day (4 hour)' };
+
+function getCandlestickData(coin, tf) {
+  const series = chartData[coin];
+  if (!series) return null;
+  if (series[tf] && series[tf].length) return series[tf];
+  // Fall back to the nearest shorter range instead of showing nothing.
+  for (let i = TF_ORDER.indexOf(tf) - 1; i >= 0; i--) {
+    const fallback = series[TF_ORDER[i]];
+    if (fallback && fallback.length) return fallback;
+  }
+  const keys = Object.keys(series);
+  return keys.length ? series[keys[keys.length - 1]] : null;
 }
 
-function loadChart(coin, tf, btn) {
-  const requestId = ++chartRequestId;
+function showChartEmpty(coin, tf) {
+  const canvas = document.getElementById('coinChart');
+  const container = canvas && canvas.parentElement;
+  const legend = document.getElementById('chartLegend');
+  const note = document.getElementById('chartNote');
+  const loading = document.getElementById('chartLoading');
+  if (canvas) canvas.style.display = 'none';
+  if (legend) legend.innerHTML = '';
+  if (note) { note.style.display = 'none'; note.textContent = ''; }
+  if (loading) { loading.style.display = 'none'; loading.textContent = ''; }
+  if (!container) return;
+  let el = container.querySelector('.chart-empty');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'chart-empty';
+    container.appendChild(el);
+  }
+  el.innerHTML = '<span class="icon">📉</span>No candlestick data for ' + coin + ' yet' +
+    '<div class="hint">CoinGecko has not published ' + (TF_LABELS[tf] || tf) + ' candles for this ticker yet. ' +
+    'The verdict above comes from agent signals only.</div>' +
+    '<div class="hint"><a href="#" id="chartRetry">Reload market data</a></div>';
+  const retry = document.getElementById('chartRetry');
+  if (retry) retry.addEventListener('click', function(e) {
+    e.preventDefault();
+    retryChartData(coin, tf);
+  });
+}
+
+async function retryChartData(coin, tf) {
+  const el = document.querySelector('.chart-container .chart-empty');
+  if (el) el.innerHTML = '<span class="icon">⏳</span>Reloading market data...';
+  try { await loadData(); } catch (e) { /* keep whatever we already have */ }
+  loadChart(coin, tf);
+}
+
+function loadChart(coin, tf, btn, hoverIdx) {
+  const isHover = typeof hoverIdx === 'number';
+  const requestId = isHover ? chartRequestId : ++chartRequestId;
   const canvas = document.getElementById('coinChart');
   if (!canvas) return;
-
-  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-
-  const days = tf === '1d' ? 1 : tf === '7d' ? 7 : 30;
   const loading = document.getElementById('chartLoading');
-  if (loading) { loading.style.display = 'block'; loading.textContent = 'Loading candlesticks...'; }
 
-  const data = getCandlestickData(coin, days);
-  if (requestId !== chartRequestId) return;
+  if (!isHover) {
+    document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+    const active = btn || document.querySelector('.tf-btn[data-tf="' + tf + '"]');
+    if (active) active.classList.add('active');
+    if (loading) { loading.style.display = 'none'; loading.textContent = ''; }
+    const note = document.getElementById('chartNote');
+    if (note) { note.style.display = 'none'; note.textContent = ''; }
+    hoverState.idx = null;
+    activeChart = { coin: coin, tf: tf };
+  }
+
+  const data = getCandlestickData(coin, tf);
+  if (!isHover && requestId !== chartRequestId) return;
   if (!data || !data.length) {
-    if (loading) loading.textContent = 'Chart data unavailable';
+    showChartEmpty(coin, tf);
+    loadMarketStats(coin, tf);
     return;
+  }
+
+  const empty = document.querySelector('.chart-container .chart-empty');
+  if (empty) empty.remove();
+  canvas.style.display = 'block';
+
+  if (!isHover) {
+    const series = chartData[coin] || {};
+    const note = document.getElementById('chartNote');
+    if (note && !(series[tf] && series[tf].length)) {
+      note.style.display = 'block';
+      note.textContent = 'No ' + (TF_LABELS[tf] || tf) + ' candles for this coin yet - showing the closest published range.';
+    }
   }
 
   const container = canvas.parentElement;
   const dpr = window.devicePixelRatio || 1;
   const cs = getComputedStyle(container);
-  const w = container.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  const h = container.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const w = Math.max(180, container.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight));
+  const h = Math.max(140, container.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom));
   canvas.width = w * dpr;
   canvas.height = h * dpr;
 
   const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, w, h);
 
   const validData = data.filter(d => Number.isFinite(d.o) && Number.isFinite(d.h) && Number.isFinite(d.l) && Number.isFinite(d.c));
   if (!validData.length) {
-    if (loading) loading.textContent = 'Chart data unavailable';
+    showChartEmpty(coin, tf);
+    loadMarketStats(coin, tf);
     return;
   }
 
@@ -848,19 +1008,14 @@ function loadChart(coin, tf, btn) {
   const wickW = Math.max(1, Math.min(2, candleW * 0.08));
   const bodyRadius = Math.min(3, candleW * 0.18);
 
+  chartGeom = { w: w, padLeft: padLeft, padTop: padTop, chartW: chartW, chartH: chartH, slot: slot, count: validData.length };
+
   function y(val) {
     return padTop + chartH - ((val - minPrice) / priceRange) * chartH;
   }
 
   function xAt(i) {
     return padLeft + (i + 0.5) * slot;
-  }
-
-  function formatPrice(val) {
-    if (val >= 1000) return '$' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    if (val >= 1) return '$' + val.toFixed(2);
-    if (val >= 0.01) return '$' + val.toFixed(4);
-    return '$' + val.toFixed(6);
   }
 
   function roundRect(context, x, y, width, height, radius) {
@@ -998,27 +1153,136 @@ function loadChart(coin, tf, btn) {
     ctx.fillText(label, Math.max(padLeft + 18, Math.min(padLeft + chartW - 18, xAt(i))), padTop + chartH + 10);
   }
 
-  if (loading) loading.style.display = 'none';
+  // ---- premium overlay: hover crosshair, OHLC tooltip and high/low markers ----
+  const hoverIdxNow = typeof hoverIdx === 'number' ? hoverIdx : hoverState.idx;
+  if (typeof hoverIdxNow === 'number' && hoverIdxNow >= 0 && hoverIdxNow < validData.length) {
+    const hd = validData[hoverIdxNow];
+    const hx = xAt(hoverIdxNow);
+    const hy = y(hd.c);
+    const hIsUp = hd.c >= hd.o;
 
-  loadMarketStats(coin);
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = 'rgba(148,163,184,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(hx, padTop); ctx.lineTo(hx, padTop + chartH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(padLeft, hy); ctx.lineTo(padLeft + chartW, hy); ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(226,232,240,0.5)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, hx - candleW / 2 - 2, Math.min(y(hd.o), y(hd.c)) - 2, candleW + 4,
+              Math.max(3, Math.abs(y(hd.o) - y(hd.c))) + 4, bodyRadius + 1);
+    ctx.stroke();
+    ctx.restore();
+
+    const hoverChange = hd.o ? ((hd.c - hd.o) / hd.o) * 100 : null;
+    const stamp = Number.isFinite(hd.x)
+      ? new Date(hd.x).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : '';
+    const tooltipLines = [
+      stamp,
+      'O ' + formatPrice(hd.o) + '    H ' + formatPrice(hd.h),
+      'L ' + formatPrice(hd.l) + '    C ' + formatPrice(hd.c),
+      hoverChange === null ? '' : (hoverChange >= 0 ? '+' : '') + hoverChange.toFixed(2) + '%',
+    ].filter(line => line !== '');
+
+    ctx.font = '600 10px Inter, sans-serif';
+    let tipW = 0;
+    tooltipLines.forEach(line => { tipW = Math.max(tipW, ctx.measureText(line).width); });
+    tipW += 18;
+    const tipH = tooltipLines.length * 14 + 10;
+    let tipX = hx + 14;
+    if (tipX + tipW > padLeft + chartW) tipX = hx - 14 - tipW;
+    tipX = Math.max(padLeft + 2, tipX);
+    const tipY = padTop + 4;
+
+    ctx.save();
+    roundRect(ctx, tipX, tipY, tipW, tipH, 7);
+    ctx.fillStyle = 'rgba(6,12,22,0.95)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(99,102,241,0.6)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, tipX, tipY, tipW, tipH, 7);
+    ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    tooltipLines.forEach((line, idx) => {
+      const isPct = line.indexOf('%') >= 0;
+      ctx.fillStyle = idx === 0 ? 'rgba(148,163,184,0.95)' : isPct ? (hIsUp ? '#17d99a' : '#ff5b72') : '#f1f5f9';
+      ctx.font = idx === 0 ? '9px Inter, sans-serif' : '600 10px Inter, sans-serif';
+      ctx.fillText(line, tipX + 9, tipY + 12 + idx * 14);
+    });
+    ctx.restore();
+  }
+
+  updateChartLegend(coin, tf, validData, hoverIdxNow);
+  if (loading) loading.style.display = 'none';
+  if (!isHover) {
+    attachChartHover(canvas);
+    loadMarketStats(coin, tf);
+  }
 }
 
-function loadMarketStats(coin) {
-  const stats = marketStats[coin] || marketStats[coin.toLowerCase()] || null;
-  const ids = { high24h: 'high24h', low24h: 'low24h', change24h: 'dailyChange', change7d: 'weeklyChange' };
-  for (const [key, id] of Object.entries(ids)) {
-    const el = document.getElementById(id);
-    if (!el || !stats) { if (el) { el.textContent = '--'; el.className = 'market-stat-value flat'; } continue; }
-    const val = stats[key];
-    if (val === undefined || val === null || val === '') { el.textContent = '--'; el.className = 'market-stat-value flat'; continue; }
-    if (key === 'change24h' || key === 'change7d') {
-      el.textContent = (val > 0 ? '+' : '') + val.toFixed(2) + '%';
-      el.className = 'market-stat-value ' + (val > 0 ? 'gain' : val < 0 ? 'loss' : 'flat');
-    } else {
-      el.textContent = '$' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      el.className = 'market-stat-value';
-    }
+function attachChartHover(canvas) {
+  if (canvas.dataset.hoverBound === '1') return;
+  canvas.dataset.hoverBound = '1';
+
+  const locate = event => {
+    if (!chartGeom || !chartGeom.count) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width) return null;
+    const clientX = (event.touches && event.touches.length) ? event.touches[0].clientX : event.clientX;
+    if (typeof clientX !== 'number') return null;
+    const rel = ((clientX - rect.left) * (chartGeom.w / rect.width) - chartGeom.padLeft) / Math.max(chartGeom.slot, 1);
+    return Math.max(0, Math.min(chartGeom.count - 1, Math.floor(rel)));
+  };
+
+  canvas.addEventListener('mousemove', event => {
+    if (!activeChart) return;
+    const idx = locate(event);
+    if (idx === null || idx === hoverState.idx) return;
+    hoverState.idx = idx;
+    loadChart(activeChart.coin, activeChart.tf, null, idx);
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    if (!activeChart || hoverState.idx === null) return;
+    hoverState.idx = null;
+    loadChart(activeChart.coin, activeChart.tf, null, null);
+  });
+}
+
+function setStatValue(id, value, isPercent) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    el.textContent = '--';
+    el.className = 'market-stat-value flat';
+    return;
   }
+  if (isPercent) {
+    el.textContent = (value > 0 ? '+' : '') + value.toFixed(2) + '%';
+    el.className = 'market-stat-value ' + (value > 0 ? 'gain' : value < 0 ? 'loss' : 'flat');
+  } else {
+    el.textContent = formatPrice(value);
+    el.className = 'market-stat-value';
+  }
+}
+
+function loadMarketStats(coin, tf) {
+  const stats = marketStats[coin] || marketStats[coin.toUpperCase()] ||
+                marketStats[coin.toLowerCase()] || null;
+  const rangeKey = tf === '30d' ? 'change30d' : tf === '1d' ? 'change24h' : 'change7d';
+  const label = document.getElementById('rangeChangeLabel');
+  if (label) {
+    label.textContent = rangeKey === 'change30d' ? '30D CHANGE' : rangeKey === 'change24h' ? '24H CHANGE' : '7D CHANGE';
+  }
+  setStatValue('high24h', stats ? stats.high24h : null, false);
+  setStatValue('low24h', stats ? stats.low24h : null, false);
+  setStatValue('dailyChange', stats ? stats.change24h : null, true);
+  setStatValue('rangeChange', stats ? stats[rangeKey] : null, true);
 }
 
   document.getElementById('runBtn').addEventListener('click', function(e) {
@@ -1029,6 +1293,36 @@ function loadMarketStats(coin) {
     btn.textContent = '⏸ Scan managed by GitHub Actions';
     statusEl.textContent = 'Manual scans run through GitHub Actions. The workflow file is included in this repository.';
   });
+
+function updateChartLegend(coin, tf, candles, hoverIdx) {
+  const legend = document.getElementById('chartLegend');
+  if (!legend) return;
+  const idx = (typeof hoverIdx === 'number' && hoverIdx >= 0 && hoverIdx < candles.length)
+    ? hoverIdx : candles.length - 1;
+  const candle = candles[idx];
+  if (!candle) { legend.innerHTML = ''; return; }
+  const first = candles[0];
+  const rangeChange = first && first.o ? ((candle.c - first.o) / first.o) * 100 : null;
+  const cls = rangeChange === null ? '' : rangeChange >= 0 ? 'up' : 'down';
+  const stamp = Number.isFinite(candle.x)
+    ? new Date(candle.x).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : '';
+  legend.innerHTML =
+    '<span>O <b>' + formatPrice(candle.o) + '</b></span>' +
+    '<span>H <b>' + formatPrice(candle.h) + '</b></span>' +
+    '<span>L <b>' + formatPrice(candle.l) + '</b></span>' +
+    '<span>C <b class="' + cls + '">' + formatPrice(candle.c) + '</b></span>' +
+    '<span class="' + cls + '">' + (rangeChange === null ? '' : (rangeChange >= 0 ? '+' : '') + rangeChange.toFixed(2) + '%') + '</span>' +
+    '<span class="stamp">' + (TF_LABELS[tf] || tf) + ' &middot; ' + stamp + '</span>';
+}
+
+window.addEventListener('resize', () => {
+  if (!activeChart) return;
+  clearTimeout(chartResizeTimer);
+  chartResizeTimer = setTimeout(() => {
+    if (activeChart) loadChart(activeChart.coin, activeChart.tf, null, hoverState.idx);
+  }, 150);
+});
 
 document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', function() {
