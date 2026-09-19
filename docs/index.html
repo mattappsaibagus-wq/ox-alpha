@@ -828,8 +828,8 @@ function loadChart(coin, tf, btn) {
   const padRight = 60;
   const chartW = w - padLeft - padRight;
   const chartH = h - padTop - padBottom;
-  const candleW = Math.max(1, (chartW / data.length) * 0.15);
-  const gap = (chartW / data.length) * 0.85;
+  const candleW = Math.max(1, (chartW / data.length) * 0.4);
+  const gap = (chartW / data.length) * 0.6;
 
   function y(val) {
     return padTop + chartH - ((val - minL) / range) * chartH;
