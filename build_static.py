@@ -24,6 +24,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(BASE_DIR, "data", "reports")
 SIGNALS_FILE = os.path.join(BASE_DIR, "data", "signals.json")
 DOCS_DIR = os.path.join(BASE_DIR, "docs")
+_COINGECKO_KEY_DISABLED = False
 
 COINGECKO_ID_MAP = {
     'btc': 'bitcoin',
@@ -57,8 +58,9 @@ def coingecko_id(symbol):
 
 
 def fetch_json(url):
+    global _COINGECKO_KEY_DISABLED
+    api_key = None if _COINGECKO_KEY_DISABLED else os.environ.get("COINGECKO_KEY")
     headers = {"Accept": "application/json"}
-    api_key = os.environ.get("COINGECKO_KEY")
     if api_key:
         headers["x-cg-demo-api-key"] = api_key
     for attempt in range(3):
@@ -67,6 +69,12 @@ def fetch_json(url):
             with urllib.request.urlopen(req, timeout=20) as resp:
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
+            if e.code == 401 and api_key:
+                _COINGECKO_KEY_DISABLED = True
+                api_key = None
+                headers = {"Accept": "application/json"}
+                print("  CoinGecko key rejected; retrying without a key")
+                continue
             if e.code != 429:
                 print(f"  CoinGecko error: {e.code}")
                 return None
