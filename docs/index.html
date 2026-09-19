@@ -811,12 +811,41 @@ async function loadCoinStats(coin) {
 let chartRequestId = 0;
 const marketCache = new Map();
 
+const COINGECKO_ID_MAP = {
+  'btc': 'bitcoin',
+  'sol': 'solana',
+  'near': 'near',
+  'storj': 'storj',
+  'zec': 'zcash',
+  'lsk': 'lisk',
+  'eth': 'ethereum',
+  'arb': 'arbitrum',
+  'op': 'optimism',
+  'matic': 'matic-network',
+  'avax': 'avalanche-2',
+  'dot': 'polkadot',
+  'link': 'chainlink',
+  'uni': 'uniswap',
+  'aave': 'aave',
+  'snx': 'havven',
+  'crv': 'curve-dao-token',
+  'sushi': 'sushi',
+  'yfi': 'yearn-finance',
+  'comp': 'compound-governance-token',
+  'mkcr': 'maker',
+  'ldo': 'lido-dao',
+  'rpl': 'rocket-pool',
+  'steth': 'staked-ether',
+  'wsteth': 'wrapped-staked-ether',
+};
+
 async function getCandlestickData(coin, days) {
   const key = coin + ':' + days;
   if (marketCache.has(key)) return marketCache.get(key);
+  const coinId = COINGECKO_ID_MAP[coin.toLowerCase()] || coin.toLowerCase();
   try {
-    const res = await fetch('https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(coin.toLowerCase()) + '/market_chart?vs_currency=usd&days=' + days + '&interval=' + (days <= 1 ? 'hourly' : 'daily'));
-    if (!res.ok) throw new Error('API error');
+    const res = await fetch('https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(coinId) + '/market_chart?vs_currency=usd&days=' + days + '&interval=' + (days <= 1 ? 'hourly' : 'daily'));
+    if (!res.ok) throw new Error('API error: ' + res.status);
     const data = await res.json();
     const prices = data.prices || [];
     if (!prices.length) return null;
@@ -837,7 +866,10 @@ async function getCandlestickData(coin, days) {
     }
     marketCache.set(key, ohlc);
     return ohlc;
-  } catch(e) { return null; }
+  } catch(e) {
+    console.error('Chart error for ' + coin + ':', e.message);
+    return null;
+  }
 }
 
 async function loadChart(coin, tf, btn) {
