@@ -101,6 +101,29 @@ def fetch_ohlc(coin, days=7):
     return ohlc
 
 
+def derive_market_stats(chart_data):
+    """Derive static market stats from the embedded chart data."""
+    stats = {}
+    for coin, candles in chart_data.items():
+        if not candles:
+            continue
+        last = candles[-1]
+        prev = candles[-2] if len(candles) > 1 else candles[0]
+        change24h = None
+        if prev and prev.get("c"):
+            change24h = ((last.get("c") or 0) - prev["c"]) / prev["c"] * 100
+        change7d = None
+        if candles[0].get("c"):
+            change7d = ((last.get("c") or 0) - candles[0]["c"]) / candles[0]["c"] * 100
+        stats[coin] = {
+            "high24h": last.get("h"),
+            "low24h": last.get("l"),
+            "change24h": change24h,
+            "change7d": change7d,
+        }
+    return stats
+
+
 def fetch_all_chart_data(cards):
     """Fetch chart data for all coins in cards."""
     chart_data = {}
@@ -165,7 +188,7 @@ def workflow_url():
     """GitHub Actions sets GITHUB_REPOSITORY=owner/repo. Local runs fall back."""
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if repo:
-        return f"https://github.com/{repo}/actions/workflows/scan.yml"
+        return f"https://github.com/{repo}/actions/workflows/pipeline.yml"
     return ""
 
 
@@ -202,6 +225,7 @@ def main():
     print("\nFetching chart data from CoinGecko...")
     chart_data = fetch_all_chart_data(cards)
     print(f"  Got chart data for {len(chart_data)} coins")
+    market_stats = derive_market_stats(chart_data)
 
     data = {
         "timestamp": ts,
@@ -209,6 +233,7 @@ def main():
         "signals": len(signals),
         "workflow_url": workflow_url(),
         "chart_data": chart_data,
+        "market_stats": market_stats,
     }
 
     os.makedirs(DOCS_DIR, exist_ok=True)

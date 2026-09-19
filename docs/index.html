@@ -624,6 +624,7 @@ main { position: relative; z-index: 1; }
 let lastTimestamp = null;
 let allCards = [];
 let chartData = {};
+let marketStats = {};
 let currentFilter = 'ALL';
 
 async function loadData() {
@@ -632,6 +633,7 @@ async function loadData() {
     const data = await r.json();
     allCards = data.cards || [];
     chartData = data.chart_data || {};
+    marketStats = data.market_stats || {};
     render(data);
   } catch(e) {
     document.getElementById('cards').innerHTML = '<div class="empty-state"><div class="icon">❌</div>Failed to load report</div>';
@@ -774,40 +776,28 @@ function showCoinModal(coin) {
 
   document.getElementById('modalOverlay').classList.add('active');
   requestAnimationFrame(() => loadChart(coin.coin, '7d'));
-  loadCoinStats(coin.coin);
 }
 
-let statsRequestId = 0;
-async function loadCoinStats(coin) {
-  const reqId = ++statsRequestId;
-  try {
-    const res = await fetch('https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(coin.toLowerCase()) + '?vs_currency=usd');
-    if (!res.ok) return;
-    const data = await res.json();
-    if (reqId !== statsRequestId) return;
-    const mkt = data.market_data || {};
-    const change24h = mkt.price_change_percentage_24h;
-    const change7d = mkt.price_change_percentage_7d;
-    const high24h = mkt.high_24h?.usd;
-    const low24h = mkt.low_24h?.usd;
+function setStat(id, val, isChange) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (val === undefined || val === null || val === '') { el.textContent = '--'; el.className = 'market-stat-value flat'; return; }
+  if (isChange) {
+    el.textContent = (val > 0 ? '+' : '') + val.toFixed(2) + '%';
+    el.className = 'market-stat-value ' + (val > 0 ? 'gain' : val < 0 ? 'loss' : 'flat');
+  } else {
+    el.textContent = '$' + val.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    el.className = 'market-stat-value';
+  }
+}
 
-    function setStat(id, val, isChange) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      if (val === undefined || val === null) { el.textContent = '--'; el.className = 'market-stat-value flat'; return; }
-      if (isChange) {
-        el.textContent = (val > 0 ? '+' : '') + val.toFixed(2) + '%';
-        el.className = 'market-stat-value ' + (val > 0 ? 'gain' : val < 0 ? 'loss' : 'flat');
-      } else {
-        el.textContent = '$' + val.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-        el.className = 'market-stat-value';
-      }
-    }
-    setStat('high24h', high24h, false);
-    setStat('low24h', low24h, false);
-    setStat('dailyChange', change24h, true);
-    setStat('weeklyChange', change7d, true);
-  } catch(e) {}
+function loadCoinStats(coin) {
+  const stats = marketStats[coin] || marketStats[coin.toLowerCase()] || null;
+  if (!stats) return;
+  setStat('high24h', stats.high24h, false);
+  setStat('low24h', stats.low24h, false);
+  setStat('dailyChange', stats.change24h, true);
+  setStat('weeklyChange', stats.change7d, true);
 }
 
 let chartRequestId = 0;
@@ -902,23 +892,29 @@ function loadChart(coin, tf, btn) {
   if (loading) loading.style.display = 'none';
 }
 
-document.getElementById('runBtn').addEventListener('click', async function(e) {
-  e.preventDefault();
-  const btn = document.getElementById('runBtn');
-  const statusEl = document.getElementById('scanStatus');
-  if (btn.disabled) return;
-  btn.disabled = true;
-  btn.textContent = '⏳ Triggering scan...';
-  statusEl.textContent = 'Connecting to GitHub Actions...';
-  try {
-    await fetch('/api/trigger-scan', { method: 'POST' });
-    statusEl.textContent = 'Scan triggered! Results will appear when the pipeline completes.';
-  } catch(err) {
-    statusEl.textContent = 'Scan trigger unavailable (running on GitHub Pages). Wait for auto-scan.';
-  }
-  btn.textContent = '▶ Run Full Scan Now';
-  btn.disabled = false;
-});
+  document.getElementById('runBtn').addEventListener('click', function(e) {
+    e.preventDefault();
+    const btn = document.getElementById('runBtn');
+    const statusEl = document.getElementById('scanStatus');
+    if (btn.disabled) return;
+    if (location.hostname.endsWith('github.io')) {
+      btn.disabled = true;
+      btn.textContent = '⏸ Manual scan unavailable';
+      statusEl.textContent = 'Manual scans run through GitHub Actions. The workflow file is included in this repository.';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = '⏳ Triggering scan...';
+    statusEl.textContent = 'Connecting to GitHub Actions...';
+    try {
+      fetch('/api/trigger-scan', { method: 'POST' });
+      statusEl.textContent = 'Scan triggered! Results will appear when the pipeline completes.';
+    } catch(err) {
+      statusEl.textContent = 'Scan trigger unavailable (running on GitHub Pages). Wait for auto-scan.';
+    }
+    btn.textContent = '▶ Run Full Scan Now';
+    btn.disabled = false;
+  });
 
 document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', function() {
