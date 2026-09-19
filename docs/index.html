@@ -828,34 +828,33 @@ function loadChart(coin, tf, btn) {
   const padRight = 60;
   const chartW = w - padLeft - padRight;
   const chartH = h - padTop - padBottom;
-  const candleW = Math.max(1, (chartW / data.length) * 0.3);
-  const gap = (chartW / data.length) * 0.1;
+  const candleW = Math.max(1, Math.min(8, chartW / data.length * 0.7));
 
   function y(val) {
     return padTop + chartH - ((val - minL) / range) * chartH;
   }
 
+  function xAt(i) {
+    return padLeft + (i + 0.5) * (chartW / data.length);
+  }
+
   data.forEach((d, i) => {
-    const x = padLeft + i * (candleW + gap) + gap / 2;
+    const x = xAt(i);
     const isUp = d.c >= d.o;
-    const color = isUp ? '#10b981' : '#ef4444';
-    const midY = y((d.h + d.l) / 2);
-    const highY = y(d.h);
-    const lowY = y(d.l);
+    const color = isUp ? '#12d37e' : '#ff4d6a';
 
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = 1;
 
     ctx.beginPath();
-    ctx.moveTo(x + candleW / 2, highY);
-    ctx.lineTo(x + candleW / 2, lowY);
+    ctx.moveTo(x, y(d.h));
+    ctx.lineTo(x, y(d.l));
     ctx.stroke();
 
     const bodyTop = Math.min(y(d.o), y(d.c));
     const bodyH = Math.max(1, Math.abs(y(d.o) - y(d.c)));
-    ctx.fillStyle = color;
-    ctx.fillRect(x, bodyTop, candleW, bodyH);
+    ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
   });
 
   ctx.fillStyle = '#64748b';
