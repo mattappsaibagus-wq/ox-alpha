@@ -779,10 +779,10 @@ function showCoinModal(coin) {
 let chartRequestId = 0;
 
 function getCandlestickData(coin, days) {
-  const key = coin + ':' + days;
-  if (chartData[coin]) {
-    return chartData[coin];
-  }
+  const all = chartData[coin];
+  if (!all || !all.length) return null;
+  if (days <= 1) return all.slice(-1);
+  if (days <= 7) return all.slice(-days);
   return null;
 }
 
