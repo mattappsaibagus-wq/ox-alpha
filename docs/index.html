@@ -624,7 +624,6 @@ main { position: relative; z-index: 1; }
 let lastTimestamp = null;
 let allCards = [];
 let chartData = {};
-let marketStats = {};
 let currentFilter = 'ALL';
 
 async function loadData() {
@@ -633,7 +632,6 @@ async function loadData() {
     const data = await r.json();
     allCards = data.cards || [];
     chartData = data.chart_data || {};
-    marketStats = data.market_stats || {};
     render(data);
   } catch(e) {
     document.getElementById('cards').innerHTML = '<div class="empty-state"><div class="icon">❌</div>Failed to load report</div>';
@@ -775,29 +773,7 @@ function showCoinModal(coin) {
     detailsHtml;
 
   document.getElementById('modalOverlay').classList.add('active');
-  requestAnimationFrame(() => loadChart(coin.coin, '7d'));
-}
-
-function setStat(id, val, isChange) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (val === undefined || val === null || val === '') { el.textContent = '--'; el.className = 'market-stat-value flat'; return; }
-  if (isChange) {
-    el.textContent = (val > 0 ? '+' : '') + val.toFixed(2) + '%';
-    el.className = 'market-stat-value ' + (val > 0 ? 'gain' : val < 0 ? 'loss' : 'flat');
-  } else {
-    el.textContent = '$' + val.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    el.className = 'market-stat-value';
-  }
-}
-
-function loadCoinStats(coin) {
-  const stats = marketStats[coin] || marketStats[coin.toLowerCase()] || null;
-  if (!stats) return;
-  setStat('high24h', stats.high24h, false);
-  setStat('low24h', stats.low24h, false);
-  setStat('dailyChange', stats.change24h, true);
-  setStat('weeklyChange', stats.change7d, true);
+  loadChart(coin.coin, '7d');
 }
 
 let chartRequestId = 0;
@@ -896,24 +872,9 @@ function loadChart(coin, tf, btn) {
     e.preventDefault();
     const btn = document.getElementById('runBtn');
     const statusEl = document.getElementById('scanStatus');
-    if (btn.disabled) return;
-    if (location.hostname.endsWith('github.io')) {
-      btn.disabled = true;
-      btn.textContent = '⏸ Manual scan unavailable';
-      statusEl.textContent = 'Manual scans run through GitHub Actions. The workflow file is included in this repository.';
-      return;
-    }
     btn.disabled = true;
-    btn.textContent = '⏳ Triggering scan...';
-    statusEl.textContent = 'Connecting to GitHub Actions...';
-    try {
-      fetch('/api/trigger-scan', { method: 'POST' });
-      statusEl.textContent = 'Scan triggered! Results will appear when the pipeline completes.';
-    } catch(err) {
-      statusEl.textContent = 'Scan trigger unavailable (running on GitHub Pages). Wait for auto-scan.';
-    }
-    btn.textContent = '▶ Run Full Scan Now';
-    btn.disabled = false;
+    btn.textContent = '⏸ Scan managed by GitHub Actions';
+    statusEl.textContent = 'Manual scans run through GitHub Actions. The workflow file is included in this repository.';
   });
 
 document.querySelectorAll('.filter-btn').forEach(btn => {
