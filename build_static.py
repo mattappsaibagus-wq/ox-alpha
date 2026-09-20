@@ -152,8 +152,8 @@ def fetch_price_points(coin_id, days):
     return points or None
 
 
-TIMEFRAMES = ("1d", "7d", "30d")
-CANDLE_TARGETS = {"1d": 48, "7d": 42, "30d": 90}
+TIMEFRAMES = ("1d", "7d", "30d", "90d", "1y")
+CANDLE_TARGETS = {"1d": 48, "7d": 42, "30d": 90, "90d": 180, "1y": 200}
 # CoinGecko's public API is rate limited (~tens of calls/minute), so every
 # request is spaced out globally instead of hammering the endpoint.
 MIN_REQUEST_INTERVAL = float(os.environ.get("CG_MIN_INTERVAL", "2.2"))
@@ -210,6 +210,75 @@ def points_to_candles(points, buckets):
     return candles or None
 
 
+def fetch_market_series(coin_id, days):
+    """Price + volume history as index-aligned (timestamp, value) point pairs.
+
+    CoinGecko granularity: 1 day -> 5-minute points, 2-90 days -> hourly,
+    91+ days -> daily. Volumes are rolling 24h USD estimates sampled on the
+    same timestamps as prices, so the two lists stay index-aligned.
+    """
+    url = (f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+           f"?vs_currency=usd&days={days}")
+    data = fetch_json(url)
+    if not isinstance(data, dict):
+        return None
+    raw_prices = data.get("prices") or []
+    raw_volumes = data.get("total_volumes") or []
+    prices, volumes = [], []
+    for i, entry in enumerate(raw_prices):
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            continue
+        try:
+            timestamp = int(entry[0])
+            price = float(entry[1])
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        volume = 0.0
+        if i < len(raw_volumes) and isinstance(raw_volumes[i], (list, tuple)) \
+                and len(raw_volumes[i]) >= 2:
+            try:
+                volume = max(0.0, float(raw_volumes[i][1]))
+            except (TypeError, ValueError):
+                volume = 0.0
+        prices.append((timestamp, price))
+        volumes.append((timestamp, volume))
+    if len(prices) < 2:
+        return None
+    return prices, volumes
+
+
+def points_to_volumes(price_points, volume_points, buckets):
+    """Average the aligned volume snapshots inside each candle bucket.
+
+    Chunks the price timeline exactly like points_to_candles, so volume bars
+    line up with the candles they belong to.
+    """
+    if buckets < 1 or len(price_points) < 2:
+        return None
+    vmap = {}
+    for point in volume_points or []:
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            try:
+                vmap[int(point[0])] = max(0.0, float(point[1]))
+            except (TypeError, ValueError):
+                continue
+    volumes = []
+    total = len(price_points)
+    for i in range(buckets):
+        start = int(i * total / buckets)
+        end = int((i + 1) * total / buckets)
+        if end <= start:
+            end = start + 1
+        window = price_points[start:end]
+        if not window:
+            continue
+        vals = [vmap.get(ts, 0.0) for ts, _ in window]
+        volumes.append({"x": window[0][0], "v": sum(vals) / len(vals)})
+    return volumes or None
+
+
 def downsample_candles(candles, target):
     """Merge adjacent candles into at most `target` candles, keeping OHLC meaning."""
     if not candles:
@@ -249,38 +318,80 @@ def fill_missing_timeframes(series):
         series["30d"] = list(series["7d"])
     if "7d" not in series and series.get("1d"):
         series["7d"] = list(series["1d"])
+    if "90d" not in series and series.get("30d"):
+        series["90d"] = list(series["30d"])
+    if "1y" not in series and series.get("90d"):
+        series["1y"] = list(series["90d"])
     return series or None
 
 
 def build_chart_series(coin_id):
-    """Build 1d / 7d / 30d candle sets for one CoinGecko id (None when unknown)."""
+    """Build 1d-1y candle sets + per-candle volume profiles for one CoinGecko id.
+
+    Four market_chart calls per coin cover every timeframe (7d reuses the 30-day
+    history), and each call contributes both candles and its volume profile.
+    """
     series = {}
+    vol = {}
 
-    intraday = fetch_ohlc_candles(coin_id, 1)
-    if intraday:
-        series["1d"] = downsample_candles(intraday, CANDLE_TARGETS["1d"])
+    day = fetch_market_series(coin_id, 1)
+    if day:
+        candles = points_to_candles(day[0], CANDLE_TARGETS["1d"])
+        if candles:
+            series["1d"] = candles
+            vols = points_to_volumes(day[0], day[1], len(candles))
+            if vols:
+                vol["1d"] = vols
 
-    monthly = fetch_ohlc_candles(coin_id, 30)
-    if monthly:
-        weekly = (monthly[-CANDLE_TARGETS["7d"]:]
-                  if len(monthly) > CANDLE_TARGETS["7d"] else list(monthly))
-        series["7d"] = weekly
-        series["30d"] = downsample_candles(monthly, CANDLE_TARGETS["30d"])
+    month = fetch_market_series(coin_id, 30)
+    if month:
+        candles = points_to_candles(month[0], CANDLE_TARGETS["30d"])
+        if candles:
+            series["30d"] = candles
+            vols = points_to_volumes(month[0], month[1], len(candles))
+            if vols:
+                vol["30d"] = vols
+        week = points_to_candles(month[0][-168:], CANDLE_TARGETS["7d"])
+        if week:
+            series["7d"] = week
+            vols = points_to_volumes(month[0][-168:], month[1][-168:], len(week))
+            if vols:
+                vol["7d"] = vols
 
-    # Some coins have no /ohlc history at all - rebuild candles from prices.
-    if not series.get("1d") or not series.get("7d") or not series.get("30d"):
-        month_points = fetch_price_points(coin_id, 30)
-        if month_points:
-            if not series.get("30d"):
-                series["30d"] = points_to_candles(month_points, CANDLE_TARGETS["30d"])
-            if not series.get("7d"):
-                series["7d"] = points_to_candles(month_points[-168:], CANDLE_TARGETS["7d"])
-        if not series.get("1d"):
-            day_points = fetch_price_points(coin_id, 1)
-            if day_points:
-                series["1d"] = points_to_candles(day_points, CANDLE_TARGETS["1d"])
+    quarter = fetch_market_series(coin_id, 90)
+    if quarter:
+        candles = points_to_candles(quarter[0], 360)
+        candles = downsample_candles(candles, CANDLE_TARGETS["90d"]) if candles else None
+        if candles:
+            series["90d"] = candles
+            vols = points_to_volumes(quarter[0], quarter[1], len(candles))
+            if vols:
+                vol["90d"] = vols
 
-    return fill_missing_timeframes(series)
+    year = fetch_market_series(coin_id, 365)
+    if year:
+        candles = points_to_candles(year[0], 365)
+        candles = downsample_candles(candles, CANDLE_TARGETS["1y"]) if candles else None
+        if candles:
+            series["1y"] = candles
+            vols = points_to_volumes(year[0], year[1], len(candles))
+            if vols:
+                vol["1y"] = vols
+
+    series = fill_missing_timeframes(series)
+    if not series:
+        return None
+
+    # Mirror volume profiles onto any timeframe that was synthesised from a
+    # shorter range so every tab can draw volume bars.
+    if "90d" in series and "90d" not in vol:
+        vol["90d"] = vol.get("30d")
+    if "1y" in series and "1y" not in vol:
+        vol["1y"] = vol.get("90d") or vol.get("30d")
+    vol = {tf: v for tf, v in vol.items() if v}
+    if vol:
+        series["vol"] = vol
+    return series
 
 
 def series_from_sparkline(prices):
@@ -456,6 +567,12 @@ def derive_market_stats(coin_id, series):
         stats["change7d"] = pct_change(weekly[0].get("o"), weekly[-1].get("c"))
     if monthly:
         stats["change30d"] = pct_change(monthly[0].get("o"), monthly[-1].get("c"))
+    quarterly = series.get("90d") or []
+    yearly = series.get("1y") or []
+    if quarterly:
+        stats["change90d"] = pct_change(quarterly[0].get("o"), quarterly[-1].get("c"))
+    if yearly:
+        stats["change1y"] = pct_change(yearly[0].get("o"), yearly[-1].get("c"))
     return stats
 
 
