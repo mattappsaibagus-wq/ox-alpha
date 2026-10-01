@@ -666,7 +666,10 @@ def main():
     print(f"  Got chart data for {len(chart_data)}/{len(cards)} coins")
 
     data = {
-        "timestamp": ts,
+        # "timestamp" = when this run finished and the data was published
+        # (after chart fetching); "scan_started" = when the agents ran.
+        "timestamp": datetime.now(JST).isoformat(),
+        "scan_started": ts,
         "cards": cards,
         "signals": len(signals),
         "workflow_url": workflow_url(),
