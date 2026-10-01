@@ -15,7 +15,8 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+JST = timezone(timedelta(hours=9), "JST")  # Japan Standard Time for scan timestamps
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -647,9 +648,10 @@ def main():
     ts = None
     fname = os.path.basename(path).replace("report_", "").replace(".md", "")
     try:
-        ts = datetime.strptime(fname, "%Y%m%d_%H%M%S").isoformat()
+        # Report filenames are written in JST (see agents/advisor.py)
+        ts = datetime.strptime(fname, "%Y%m%d_%H%M%S").replace(tzinfo=JST).isoformat()
     except Exception:
-        ts = datetime.now().isoformat()
+        ts = datetime.now(JST).isoformat()
 
     signals = []
     if os.path.exists(SIGNALS_FILE):
