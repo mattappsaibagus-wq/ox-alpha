@@ -5,8 +5,7 @@ report with a suggested position size.
 """
 import json
 import os
-from datetime import datetime
-from .base import BaseAgent, REPORTS_DIR, SIGNALS_FILE, MEMORY_DIR
+from .base import BaseAgent, now_jst, REPORTS_DIR, SIGNALS_FILE, MEMORY_DIR
 
 
 class InvestmentAdvisor(BaseAgent):
@@ -114,11 +113,12 @@ class InvestmentAdvisor(BaseAgent):
         return 1.0
 
     def _write_report(self, verdicts):
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        now = now_jst()
+        ts = now.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(REPORTS_DIR, f"report_{ts}.md")
         with open(path, "w") as f:
             f.write("# 🧠 Crypto Agent Team — Investment Report\n\n")
-            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"Generated: {now.strftime('%Y-%m-%d %H:%M:%S')} JST\n\n")
             summary = {"BUY": 0, "WATCH": 0, "AVOID": 0}
             for v in verdicts:
                 summary[v["action"]] += 1

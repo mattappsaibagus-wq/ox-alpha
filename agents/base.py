@@ -6,7 +6,7 @@ import functools
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import requests
@@ -20,6 +20,14 @@ REPORTS_DIR = os.path.join(DATA_DIR, "reports")
 def ensure_dirs():
     os.makedirs(MEMORY_DIR, exist_ok=True)
     os.makedirs(REPORTS_DIR, exist_ok=True)
+
+
+# Japan Standard Time (UTC+9, no DST) — used for every user-facing scan time.
+JST = timezone(timedelta(hours=9), "JST")
+
+
+def now_jst():
+    return datetime.now(JST)
 
 
 def now_iso():
