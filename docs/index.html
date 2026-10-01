@@ -702,6 +702,23 @@ function formatJST(ts, opts) {
     hour: '2-digit', minute: '2-digit', hour12: false
   }, opts || {})) + ' JST';
 }
+function timeAgo(ts) {
+  const mins = Math.max(0, Math.floor((Date.now() - toJSTDate(ts).getTime()) / 60000));
+  if (isNaN(mins)) return '';
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + ' min ago';
+  const h = Math.floor(mins / 60), m = mins % 60;
+  if (h < 24) return h + 'h ' + (m ? m + 'm ' : '') + 'ago';
+  const d = Math.floor(h / 24);
+  return d + (d === 1 ? ' day ago' : ' days ago');
+}
+let lastScanTs = null;
+function renderLastScan() {
+  const el = document.getElementById('lastRun');
+  if (!el || !lastScanTs) return;
+  el.textContent = 'Last scan: ' + formatJST(lastScanTs) + ' · ' + timeAgo(lastScanTs);
+}
+setInterval(renderLastScan, 30000);
 let allCards = [];
 let chartData = {};
 let marketStats = {};
@@ -777,7 +794,11 @@ async function loadData() {
 
 function render(data) {
   if (data.timestamp) {
-    document.getElementById('lastRun').textContent = 'Last scan: ' + formatJST(data.timestamp);
+    lastScanTs = data.timestamp;
+    renderLastScan();
+    if (data.scan_started) {
+      document.getElementById('lastRun').title = 'Scan started ' + formatJST(data.scan_started) + ', published ' + formatJST(data.timestamp);
+    }
     lastTimestamp = data.timestamp;
   }
 
