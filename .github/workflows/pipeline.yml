@@ -32,6 +32,11 @@ jobs:
           git config user.email "bot@users.noreply.github.com"
           git add docs/data.json || true
           git commit -m "pipeline run $(TZ=Asia/Tokyo date +'%F_%H:%M JST')" || exit 0
+          # build_static.py can leave untracked/ignored files that block rebase
+          git stash push --include-untracked --keep-index -m "ci-scratch" || true
+          git restore --staged :/ || true
+          git restore . || true
+          git clean -fd || true
           # main may have moved during the ~20 min scan: rebase onto it, keep our fresh data.json
           for i in 1 2 3; do
             git pull --rebase -X theirs origin main && git push origin HEAD:main && exit 0
